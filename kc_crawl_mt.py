@@ -14,7 +14,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
-HEADLESS = False
+HEADLESS = True
 save_lock = Lock()  # 파일 저장을 위한 쓰레드 락
 SLEEP_TIME = 2
 
@@ -205,7 +205,94 @@ class SafetyKoreaCrawler:
             self.driver.back()
             self.wait_for_element(By.CLASS_NAME, "tb_list")
         except Exception as e:
+            error_message = str(e)
+            if "no such window" in error_message or "target window already closed" in error_message:
+                self.logger.error("브라우저 창이 닫혔습니다. 크롤링을 종료합니다.")
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+                raise SystemExit("Browser window closed")
             self.logger.error(f"Row processing error: {e}")
+            raise
+
+    def safe_quit(self):
+        """안전하게 브라우저를 종료합니다."""
+        try:
+            if self.driver:
+                self.driver.quit()
+        except Exception as e:
+            self.logger.error(f"브라우저 종료 중 오류 발생: {e}")
+
+    def move_to_start_position_forward(self):
+        """기존 데이터 개수를 기반으로 시작 위치로 이동합니다."""
+        try:
+            # 기존 데이터 개수
+            existing_count = len(self.crawled_data)
+            if existing_count == 0:
+                return
+
+            # 10개씩 표시되므로, 몇 번의 10페이지 이동이 필요한지 계산
+            # 예: 44개 데이터가 있다면 4번의 10페이지 이동 필요 (41번째부터 시작)
+            jumps_needed = existing_count // 10
+
+            self.logger.info(f"기존 데이터 {existing_count}개, {jumps_needed}번의 페이지 이동이 필요합니다.")
+
+            # 10페이지씩 이동
+            for i in range(jumps_needed):
+                # 10페이지 버튼 클릭 (ul의 마지막에서 3번째 li)
+                ten_page_button = self.wait_for_element(
+                    By.XPATH, "//div[contains(@class, 'page')]/ul/li[last()-2]//a", "clickable"
+                )
+                ten_page_button.click()
+                time.sleep(SLEEP_TIME)
+
+                # 다음 페이지 버튼 클릭
+                next_button = self.wait_for_element(By.XPATH, "//a[@title='다음 페이지']", "clickable")
+                next_button.click()
+                time.sleep(SLEEP_TIME)
+
+                self.logger.info(f"페이지 이동 진행 중: {i+1}/{jumps_needed}")
+
+            self.logger.info(f"시작 위치로 이동 완료 (기존 데이터: {existing_count}개)")
+
+        except Exception as e:
+            self.logger.error(f"시작 위치 이동 중 오류 발생: {e}")
+            raise
+
+    def move_to_start_position_backward(self):
+        """기존 데이터 개수를 기반으로 마지막에서부터 시작 위치로 이동합니다."""
+        try:
+            # 기존 데이터 개수
+            existing_count = len(self.crawled_data)
+            if existing_count == 0:
+                return
+
+            jumps_needed = existing_count // 10
+
+            self.logger.info(f"기존 데이터 {existing_count}개, {jumps_needed}번의 페이지 이동이 필요합니다.")
+
+            # 10페이지씩 이동 (역방향)
+            for i in range(jumps_needed):
+
+                # 1페이지 버튼 클릭 (ul의 마지막에서 3번째 li)
+                ten_page_button = self.wait_for_element(
+                    By.XPATH, "//div[contains(@class, 'page')]/ul/li[3]//a", "clickable"
+                )
+                ten_page_button.click()
+                time.sleep(SLEEP_TIME)
+
+                # 이전 페이지 버튼 클릭
+                prev_button = self.wait_for_element(By.XPATH, "//a[@title='이전 페이지']", "clickable")
+                prev_button.click()
+                time.sleep(SLEEP_TIME)
+
+                self.logger.info(f"페이지 이동 진행 중: {i+1}/{jumps_needed}")
+
+            self.logger.info(f"시작 위치로 이동 완료 (기존 데이터: {existing_count}개)")
+
+        except Exception as e:
+            self.logger.error(f"시작 위치 이동 중 오류 발생: {e}")
             raise
 
     def crawl_forward(self, index):
@@ -213,12 +300,17 @@ class SafetyKoreaCrawler:
         try:
             self.driver.get("https://www.safetykorea.kr/release/itemSearch")
             self.load_existing_data()
+            self.move_to_start_position_forward()  # 기존 데이터 위치로 이동
+
             next_button = self.wait_for_element(By.XPATH, "//a[@title='다음 페이지']", "clickable")
             next_button.click()
 
             while True:
                 try:
                     self.process_row(index)
+                except SystemExit:
+                    self.logger.info("브라우저가 닫혀 크롤링을 종료합니다.")
+                    break
                 except Exception as e:
                     self.logger.error(f"Row processing error: {e}")
                     continue
@@ -237,7 +329,7 @@ class SafetyKoreaCrawler:
         except Exception as e:
             self.logger.error(f"예상치 못한 오류: {e}")
         finally:
-            self.driver.quit()
+            self.safe_quit()
 
     def crawl_backward(self, index):
         """뒤로 이동하면서 크롤링을 실행합니다."""
@@ -250,9 +342,14 @@ class SafetyKoreaCrawler:
             last_page_button.click()
             time.sleep(SLEEP_TIME)
 
+            self.move_to_start_position_backward()  # 기존 데이터 위치로 이동
+
             while True:
                 try:
                     self.process_row(index)
+                except SystemExit:
+                    self.logger.info("브라우저가 닫혀 크롤링을 종료합니다.")
+                    break
                 except Exception as e:
                     self.logger.error(f"Row processing error: {e}")
                     continue
@@ -271,7 +368,7 @@ class SafetyKoreaCrawler:
         except Exception as e:
             self.logger.error(f"예상치 못한 오류: {e}")
         finally:
-            self.driver.quit()
+            self.safe_quit()
 
 
 def run_crawler(index, direction="forward"):
@@ -307,8 +404,8 @@ def main():
     try:
         # 쓰레드 생성 및 시작
         for i in range(args.threads):
-            # direction = "backward" if i // 10 == 1 else "forward"
-            direction = "forward" if i // 10 == 1 else "backward"
+            direction = "backward" if i // 10 == 1 else "forward"
+            # direction = "forward" if i // 10 == 1 else "backward"
             t = Thread(
                 target=run_crawler,
                 args=(
