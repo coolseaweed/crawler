@@ -1,1 +1,4 @@
 data/*
+logs/*
+output/*
+output_bak/*
