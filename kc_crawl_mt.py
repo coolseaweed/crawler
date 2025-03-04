@@ -13,10 +13,54 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
+import random
+import requests
 
-HEADLESS = True
+HEADLESS =  True
 save_lock = Lock()  # 파일 저장을 위한 쓰레드 락
-SLEEP_TIME = 2
+SLEEP_TIME = 7
+
+# 프록시 리스트 설정
+PROXY_LIST = [
+    # "222.96.176.71:3128",
+    # "211.225.214.241:80"
+]
+# User-Agent 랜덤 설정
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+]
+
+
+def random_us_proxy():
+
+    proxy_url = "https://www.us-proxy.org/"
+
+    res = requests.get(proxy_url)
+    soup = BeautifulSoup(res.text, "lxml")
+
+    table = soup.find("tbody")
+    rows = table.find_all("tr")
+    proxy_server_list = []
+
+    for row in rows:
+        https = row.find("td", attrs={"class": "hx"})
+        if https.text == "yes":
+            ip = row.find_all("td")[0].text
+            port = row.find_all("td")[1].text
+            server = f"{ip}:{port}"
+            proxy_server_list.append(server)
+
+    proxy_server = random.choices(proxy_server_list)[0]
+    return proxy_server
+
+
+def get_random_proxy() -> str:
+    """쓰레드 인덱스에 따라 프록시를 할당합니다."""
+    if not PROXY_LIST:
+        return None
+    return random.choice(PROXY_LIST)
 
 
 def setup_logger(index):
@@ -59,18 +103,39 @@ def setup_logger(index):
 class SafetyKoreaCrawler:
     def __init__(self, index, base_dir="output", headless=False):
         chrome_options = Options()
+        self.logger = setup_logger(index)
+
         if headless:
             chrome_options.add_argument("--headless=new")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--window-size=1920,1080")
 
-        self.driver = webdriver.Chrome(options=chrome_options)
+        # 프록시 설정
+        proxy = get_random_proxy()
+        if proxy:
+            chrome_options.add_argument(f"--proxy-server={proxy}")
+
+        # 기타 크롬 옵션 설정
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-infobars")
+        chrome_options.add_argument("--disable-notifications")
+
+        chrome_options.add_argument(f"user-agent={random.choice(USER_AGENTS)}")
+
+        try:
+            self.driver = webdriver.Chrome(options=chrome_options)
+            if proxy:
+                self.logger.info(f"Thread {index} using proxy: {proxy}")
+        except Exception as e:
+            self.logger.error(f"브라우저 초기화 실패: {e}")
+            raise
+
         self.crawled_data = []
         self.existing_cert_numbers = set()
-        self.output_path = f"{base_dir}/{index}.json"  # 인덱스.json 형식으로 저장
+        self.output_path = f"{base_dir}/{index}.json"
         self.index = index
-        self.logger = setup_logger(index)
 
     def load_existing_data(self):
         """기존 데이터 파일을 로드합니다."""
@@ -370,6 +435,17 @@ class SafetyKoreaCrawler:
         finally:
             self.safe_quit()
 
+    def check_proxy_connection(self):
+        """프록시 연결 상태를 확인합니다."""
+        try:
+            self.driver.get("http://httpbin.org/ip")
+            ip_data = json.loads(self.driver.page_source)
+            self.logger.info(f"Current IP: {ip_data.get('origin')}")
+            return True
+        except Exception as e:
+            self.logger.error(f"프록시 연결 확인 실패: {e}")
+            return False
+
 
 def run_crawler(index, direction="forward"):
     """각 쓰레드에서 실행될 크롤러 함수"""
@@ -404,8 +480,8 @@ def main():
     try:
         # 쓰레드 생성 및 시작
         for i in range(args.threads):
-            direction = "backward" if i // 10 == 1 else "forward"
-            # direction = "forward" if i // 10 == 1 else "backward"
+            # direction = "backward" if i // 10 == 1 else "forward"
+            direction = "forward" if i // 10 == 1 else "backward"
             t = Thread(
                 target=run_crawler,
                 args=(
@@ -423,7 +499,6 @@ def main():
 
     except KeyboardInterrupt:
         print("\n사용자에 의해 중단되었습니다.")
-        # 프로그램 종료
         print("프로그램이 종료되었습니다.")
 
 
